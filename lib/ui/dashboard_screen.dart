@@ -21,7 +21,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late final VoiceAlertService _voiceAlertService;
   StreamSubscription<DriverState>? _subscription;
   bool _cameraMode = true;
-  bool _isMonitoring = false;
 
   DriverState _currentState = const DriverState(
     blinkRate: 12,
@@ -57,7 +56,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       stream = _monitorService.stateStream;
       _cameraMode = false;
     }
-    _isMonitoring = true;
     _subscription = stream.listen((state) async {
       if (!mounted) {
         return;
@@ -66,7 +64,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _currentState = state;
       });
       if (state.riskLevel == DriverRiskLevel.danger) {
-        await _voiceAlertService.speakDangerAlert();
+        await _voiceAlertService.startDangerAlarm();
+      } else {
+        await _voiceAlertService.stopAlarm();
       }
     });
   }
@@ -76,12 +76,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _subscription = null;
     _monitorService.stop();
     await _cameraMonitorService.stop();
-    await _voiceAlertService.stopSpeaking();
+    await _voiceAlertService.stopAlarm();
     if (!mounted) {
       return;
     }
     setState(() {
-      _isMonitoring = false;
       _currentState = const DriverState(
         blinkRate: 0,
         eyeClosurePercent: 0,
@@ -92,6 +91,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         isUsingCamera: false,
       );
     });
+  }
+
+  Future<void> _stopAndExit() async {
+    await _stopMonitoring();
+    if (!mounted) return;
+    Navigator.of(context).pop();
   }
 
   @override
@@ -198,32 +203,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: () async {
-                      if (_isMonitoring) {
-                        await _stopMonitoring();
-                        return;
-                      }
-                      await _startMonitoring();
-                      if (!mounted) {
-                        return;
-                      }
-                      setState(() {});
-                    },
+                    onPressed: _stopAndExit,
                     style: FilledButton.styleFrom(
-                      backgroundColor:
-                          _isMonitoring ? const Color(0xFFB91C1C) : colors.button,
+                      backgroundColor: const Color(0xFFB91C1C),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
-                    icon: Icon(
-                      _isMonitoring
-                          ? Icons.pause_circle_filled_rounded
-                          : Icons.play_circle_fill_rounded,
-                    ),
-                    label: Text(
-                      _isMonitoring
-                          ? 'Monitoringni to`xtatish'
-                          : 'Monitoringni boshlash',
-                    ),
+                    icon: const Icon(Icons.stop_circle_rounded),
+                    label: const Text('Monitoringni to`xtatish'),
                   ),
                 ),
               ],
@@ -312,22 +298,59 @@ class _CameraPreviewCard extends StatelessWidget {
                   style: TextStyle(color: Colors.white70),
                 ),
               )
-            : LayoutBuilder(
-                builder: (context, constraints) {
-                  final aspectRatio = cameraController!.value.aspectRatio;
+            : _UndistortedCameraPreview(controller: cameraController!),
+      ),
+    );
+  }
+}
 
-                  return SizedBox.expand(
-                    child: FittedBox(
-                      fit: BoxFit.cover,
-                      child: SizedBox(
-                        width: constraints.maxWidth,
-                        height: constraints.maxWidth / aspectRatio,
-                        child: CameraPreview(cameraController!),
-                      ),
-                    ),
-                  );
-                },
-              ),
+/// Kamerani konteynerga proportsiyalarini saqlagan holda joylashtiradi.
+///
+/// Eski versiyada `cameraController.value.aspectRatio` to'g'ridan-to'g'ri
+/// ekrandagi proporsiya deb qabul qilingan edi. Aslida bu qiymat sensor
+/// (kamera matritsasi) yo'nalishidagi proportsiyani qaytaradi (masalan,
+/// 16:9 = 1.78). Telefon portret holatda ushlanganda kamera tasviri 90°
+/// burilib chiqadi, ya'ni ekranda ko'rinadigan proportsiya teskari bo'ladi
+/// (9:16 = 0.56). Eski kod bu farqni hisobga olmasdi va tasvirni bosib
+/// (siqib) ko'rsatardi.
+///
+/// Bu yerda biz `previewSize` ning kenglik va balandligini portret holatda
+/// almashtirib (swap qilib), FittedBox.cover orqali tasvirni konteynerga
+/// proportsional ravishda joylashtiramiz — chetlari kerakli paytda kesiladi,
+/// lekin tasvir hech qachon siqilmaydi.
+class _UndistortedCameraPreview extends StatelessWidget {
+  const _UndistortedCameraPreview({required this.controller});
+
+  final CameraController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final previewSize = controller.value.previewSize;
+    if (previewSize == null) {
+      return const SizedBox.shrink();
+    }
+
+    // previewSize sensor yo'nalishidagi o'lcham — kameraning fizik matritsasi
+    // landshaft holatida (masalan, 1920 x 1080). Portret holatdagi telefonda
+    // tasvir 90° burilgan holda chiqadi, shuning uchun aspect ratio teskari.
+    final orientation = MediaQuery.of(context).orientation;
+    final isPortrait = orientation == Orientation.portrait;
+
+    // Ko'rsatiladigan tasvir uchun samarali kenglik va balandlik.
+    final double displayWidth = isPortrait ? previewSize.height : previewSize.width;
+    final double displayHeight = isPortrait ? previewSize.width : previewSize.height;
+
+    return ClipRect(
+      child: SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.cover, // konteynerni to'liq qoplaydi, ortiqcha qism kesiladi
+          alignment: Alignment.center,
+          child: SizedBox(
+            width: displayWidth,
+            height: displayHeight,
+            child: CameraPreview(controller),
+          ),
+        ),
       ),
     );
   }
@@ -383,13 +406,11 @@ class _RiskPalette {
     required this.backgroundTop,
     required this.backgroundBottom,
     required this.banner,
-    required this.button,
   });
 
   final Color backgroundTop;
   final Color backgroundBottom;
   final Color banner;
-  final Color button;
 }
 
 _RiskPalette _paletteForRisk(DriverRiskLevel riskLevel) {
@@ -398,19 +419,16 @@ _RiskPalette _paletteForRisk(DriverRiskLevel riskLevel) {
       backgroundTop: Color(0xFF0F172A),
       backgroundBottom: Color(0xFF1D4ED8),
       banner: Color(0xFF059669),
-      button: Color(0xFF2563EB),
     ),
     DriverRiskLevel.warning => const _RiskPalette(
       backgroundTop: Color(0xFF1E1B4B),
       backgroundBottom: Color(0xFF7C2D12),
       banner: Color(0xFFD97706),
-      button: Color(0xFFB45309),
     ),
     DriverRiskLevel.danger => const _RiskPalette(
       backgroundTop: Color(0xFF3F0B14),
       backgroundBottom: Color(0xFF991B1B),
       banner: Color(0xFFDC2626),
-      button: Color(0xFFB91C1C),
     ),
   };
 }

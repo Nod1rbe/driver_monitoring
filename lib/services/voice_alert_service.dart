@@ -1,35 +1,78 @@
-import 'package:flutter_tts/flutter_tts.dart';
+import 'dart:async';
 
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/services.dart';
+
+/// Xavfli holatda (DANGER) ovoz fayli (assets'dan) chalinadi.
+///
+/// Fayl 14 s davom etadi, lekin biz faqat dastlabki 3 sekundini chalamiz.
+/// Agar haydovchi uyg'onmasa va holat hali ham DANGER bo'lsa, segmentni
+/// qaytadan boshlaymiz (loop). SAFE/WARNING ga o'tsa darhol to'xtaydi.
 class VoiceAlertService {
-  VoiceAlertService() : _tts = FlutterTts();
+  VoiceAlertService();
 
-  final FlutterTts _tts;
-  DateTime? _lastAlertTime;
+  // AssetSource pathi `assets/` papkasiga nisbatan beriladi — prefiks qo'shilmasin.
+  static const String _assetPath = 'danger-alarm-sound-effect-meme.mp3';
+  static const Duration _segmentDuration = Duration(seconds: 3);
+
+  final AudioPlayer _player = AudioPlayer();
+  bool _initialized = false;
+  bool _isAlarmActive = false;
+  Timer? _segmentTimer;
 
   Future<void> init() async {
-    await _tts.setLanguage('uz-UZ');
-    await _tts.setSpeechRate(0.48);
-    await _tts.setVolume(1.0);
-    await _tts.setPitch(1.0);
+    if (_initialized) return;
+    await _player.setReleaseMode(ReleaseMode.stop);
+    await _player.setVolume(1.0);
+    _initialized = true;
   }
 
-  Future<void> speakDangerAlert() async {
-    final now = DateTime.now();
-    if (_lastAlertTime != null &&
-        now.difference(_lastAlertTime!) < const Duration(seconds: 8)) {
+  /// DANGER kelganda chaqiriladi. Idempotent — agar signal allaqachon
+  /// chalinayotgan bo'lsa, qayta boshlamaydi.
+  Future<void> startDangerAlarm() async {
+    if (!_initialized) {
+      await init();
+    }
+    if (_isAlarmActive) return;
+    _isAlarmActive = true;
+    unawaited(HapticFeedback.heavyImpact());
+    await _playSegment();
+  }
+
+  Future<void> _playSegment() async {
+    if (!_isAlarmActive) return;
+    try {
+      await _player.stop();
+      await _player.play(AssetSource(_assetPath), volume: 1.0);
+    } catch (_) {
+      _isAlarmActive = false;
       return;
     }
-
-    _lastAlertTime = now;
-    await _tts.stop();
-    await _tts.speak('Diqqat! Sizda uyqu holati aniqlandi. Xavfsiz joyga toxtang.');
+    _segmentTimer?.cancel();
+    _segmentTimer = Timer(_segmentDuration, () {
+      if (!_isAlarmActive) return;
+      // 3 sekund o'tdi — agar hali ham DANGER bo'lsa, segmentni qaytarsin.
+      _playSegment();
+    });
   }
 
-  Future<void> stopSpeaking() async {
-    await _tts.stop();
+  /// Risk SAFE/WARNING ga tushganda chaqiriladi.
+  Future<void> stopAlarm() async {
+    if (!_isAlarmActive) return;
+    _isAlarmActive = false;
+    _segmentTimer?.cancel();
+    _segmentTimer = null;
+    try {
+      await _player.stop();
+    } catch (_) {}
   }
+
+  /// Eski API bilan moslik uchun.
+  Future<void> speakDangerAlert() => startDangerAlarm();
+  Future<void> stopSpeaking() => stopAlarm();
 
   Future<void> dispose() async {
-    await _tts.stop();
+    await stopAlarm();
+    await _player.dispose();
   }
 }

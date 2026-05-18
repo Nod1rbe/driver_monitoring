@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'ui/dashboard_screen.dart';
+import 'ui/start_screen.dart';
 
 class DriverMonitoringApp extends StatelessWidget {
   const DriverMonitoringApp({super.key});
@@ -18,7 +18,7 @@ class DriverMonitoringApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const DashboardScreen(),
+      home: const StartScreen(),
     );
   }
 }

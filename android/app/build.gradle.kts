@@ -30,11 +30,22 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        // Release uchun debug keystore'dan foydalanamiz (faqat lokal test uchun;
+        // Play Store/CI uchun keyinroq alohida keystore yarating).
+        val releaseConfig = findByName("release") ?: create("release")
+        releaseConfig.apply {
+            val debugKeystore = file("${System.getProperty("user.home")}/.android/debug.keystore")
+            storeFile = debugKeystore
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }
